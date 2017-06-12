@@ -163,8 +163,8 @@ void do_sobel(int32_t width, int32_t height){
 }
 
 void master(void){
-    int32_t msg = 0;
-    int8_t buf[500];
+    int32_t msg = 0, worker;
+    int8_t buf[2];
     int16_t val, channel;
 
     if (hf_comm_create(hf_selfid(), 1000, 0))
@@ -172,7 +172,11 @@ void master(void){
 
     do_gausian(width, height);
     do_sobel(width, height);
-    //send poison pill
+    buf[0] = POISON_PILL;
+    for (worker = 2; worker <=5; worker++){
+        hf_sendack(worker, 5000, buf, sizeof(buf), 1, 500);
+    }
+    hf_kill(hf_selfid());
 }
 
 
@@ -225,39 +229,40 @@ void worker(void){
                     filtered_pixel = buf[pos_flat_buffer];
                 }
 
-                //send filtered buffer
-                val = hf_sendack(worker, 5000, image_buf, sizeof(image_buf), 1, 500);
-                worker++; //next worker
+                //send filtered buffer, one channel for worker
+                val = hf_sendack(AGGREGATOR, 6000, image_buf, sizeof(image_buf), hf_selfid(), 500);
                 if (val)
                     printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_selfid(), val);
             }
         }
     }
-
-
+    buf[0] = POISON_PILL;
+    hf_sendack(AGGREGATOR, 5000, buf, sizeof(buf), hf_selfid(), 500);
+    hf_kill(hf_selfid());
 }
 
 /**
     Aggregate the filtered pixels.
     Buffer format: [task, position, pixel value]
-    if task is poison_pill, then this process must die
+    if this process receive poison pill of all workers, then this process must die
 */
 void aggregator(void){
-    int8_t buf[1500], filtered_pixel, task;
+    int8_t buf[1500], filtered_pixel, task, poison_pills=0, remaining_workers = 4; // cpus 2, 3, 4 and 5
     uint16_t cpu, src_port, size;
     int16_t val;
-    int32_t i,j;
+    int32_t i,j, channel;
 
     uint8_t *img;
     img = (uint8_t *) malloc(height * width);
 
-    if (hf_comm_create(hf_selfid(), 5000, 0))
+    if (hf_comm_create(hf_selfid(), 6000, 0))
         panic(0xff);
 
-    while (task != POISON_PILL){
-        i = hf_recvprobe();
-        if (i >= 0) {
-            val = hf_recvack(&cpu, &src_port, buf, &size, i);
+    /*  */
+    while (poison_pills < remaining_workers){
+        channel = hf_recvprobe(); // retorna o channel, cuidado ao enviar, 
+        if (channel >= 0) {
+            val = hf_recvack(&cpu, &src_port, buf, &size, channel);
             if (val){
                 printf("[WORKER %d] hf_recvack(): error %d\n", cpu, val);
             } else {
@@ -266,6 +271,9 @@ void aggregator(void){
                 int8_t tgt_position = buf[1]; // pixel position of target image
                 int8_t filtered_pixel = buf[2];
                 img[tgt_position] = filtered_pixel;
+                if (task == POISON_PILL) {
+                    poison_pills++;
+                }
             }
         }
     }
@@ -286,11 +294,12 @@ void aggregator(void){
 
     printf("\n\nend of processing!\n");
     panic(0);
+    hf_kill(hf_selfid());
 }
 
 /**
-    Notação:
-        0 - Orchestrator
+    Notation:
+        0 - master
         2, 3,4,5 - Worker
         1 - Aggregator
 */
