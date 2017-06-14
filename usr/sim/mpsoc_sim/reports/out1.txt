@@ -1,0 +1,74 @@
+
+KERNEL: booting...
+===========================================================
+HellfireOS v2.17.03 [Jun 14 2017, 19:19:22]
+Embedded Systems Group - GSE, PUCRS - [2007 - 2017]
+===========================================================
+
+arch:          mips/plasma
+sys clk:       25000 kHz
+time slice:    10480 us
+heap size:     500000 bytes
+max tasks:     30
+
+HAL: _vm_init()
+HAL: _sched_init()
+HAL: _irq_init()
+HAL: _timer_init()
+KERNEL: [idle task], id: 0, p:0, c:0, d:0, addr: 100011c0, sp: 10018520, ss: 1024 bytes
+HAL: _device_init()
+KERNEL: this is core 1
+KERNEL: NoC queue init, 64 packets
+KERNEL: NoC driver registered
+HAL: _task_init()Spawn Aggregator...
+
+KERNEL: [aggregator], id: 1, p:0, c:0, d:0, addr: 10002790, sp: 1001b850, ss: 4096 bytes
+KERNEL: free heap: 485368 bytes
+KERNEL: HellfireOS is running
+[AGGREGATOR] Received pixel: 101 in position: 0
+[AGGREGATOR] Received pixel: 101 in position: 1
+[AGGREGATOR] Received pixel: 101 in position: 2
+[AGGREGATOR] Received pixel: 101 in position: 3
+[AGGREGATOR] Received pixel: 101 in position: 4
+[AGGREGATOR] Received pixel: 101 in position: 5
+[AGGREGATOR] Received pixel: 101 in position: 6
+[AGGREGATOR] Received pixel: 101 in position: 7
+[AGGREGATOR] Received pixel: 101 in position: 8
+[AGGREGATOR] Received pixel: 101 in position: 9
+[AGGREGATOR] Received pixel: 101 in position: 10
+[AGGREGATOR] Received pixel: 101 in position: 11
+[AGGREGATOR] Received pixel: 101 in position: 12
+[AGGREGATOR] Received pixel: 101 in position: 13
+[AGGREGATOR] Received pixel: 101 in position: 14
+[AGGREGATOR] Received pixel: 101 in position: 15
+[AGGREGATOR] Received pixel: 101 in position: 16
+[AGGREGATOR] Received pixel: 101 in position: 17
+[AGGREGATOR] Received pixel: 101 in position: 19
+[AGGREGATOR] Received pixel: 101 in position: 20
+[AGGREGATOR] Received pixel: 101 in position: 21
+[AGGREGATOR] Received pixel: 101 in position: 23
+[AGGREGATOR] Received pixel: 101 in position: 24
+[AGGREGATOR] Received pixel: 101 in position: 25
+[AGGREGATOR] Received pixel: 101 in position: 27
+[AGGREGATOR] Received pixel: 101 in position: 28
+[AGGREGATOR] Received pixel: 101 in position: 29
+[AGGREGATOR] Received pixel: 101 in position: 31
+[AGGREGATOR] Received pixel: 101 in position: 32
+[AGGREGATOR] Received pixel: 101 in position: 33
+[AGGREGATOR] Received pixel: 101 in position: 35
+[AGGREGATOR] Received pixel: 101 in position: 36
+[AGGREGATOR] Received pixel: 101 in position: 37
+[AGGREGATOR] Received pixel: 101 in position: 39
+[AGGREGATOR] Received pixel: 101 in position: 40
+[AGGREGATOR] Received pixel: 101 in position: 41
+[AGGREGATOR] Received pixel: 101 in position: 43
+[AGGREGATOR] Received pixel: 101 in position: 44
+[AGGREGATOR] Received pixel: 101 in position: 45
+[AGGREGATOR] Received pixel: 101 in position: 47
+[AGGREGATOR] Received pixel: 101 in position: 48
+[AGGREGATOR] Received pixel: 101 in position: 49
+[AGGREGATOR] Received pixel: 101 in position: 51
+[AGGREGATOR] Received pixel: 101 in position: 52
+[AGGREGATOR] Received pixel: 101 in position: 53
+[AGGREGATOR] Received pixel: 101 in position: 55
+[AGGREGATOR] Received pixel: 101 in position: 56

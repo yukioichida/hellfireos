@@ -3,34 +3,33 @@
 #include <string.h>
 
 struct Data {
-	uint16_t i;
-	uint16_t j;
+	uint8_t i;
+	uint32_t j;
 };
 
 union Package {
 	struct Data data;
-	uint8_t values[32];
+	int8_t values[32];
 };
 
 int main(){
-
-	struct Data data;
-	data.i = 43000;
-	data.j = 45;
+	int k;
 
 	union Package package;
 
+	//package.data = data;
+	package.data.i = 3;
+	package.data.j = 3495;
+
 	union Package output;
 
-	package.data = data;
-
-	int k;
+	printf("Value %d \n", package.values[1]);
 
 	for (k = 0; k < 20; k++){
 		output.values[k] = package.values[k];
 	}
 
-	uint16_t received_i = output.data.i;
+	uint32_t received_i = output.data.j;
 
 	printf("Value of vector union: %d\n", received_i);
 

@@ -115,7 +115,9 @@ void do_filter(int32_t width, int32_t height, uint8_t filter){
                 /* Delegate the buffer to the worker */
                 if (worker > 5){
                     worker = 2; //round robin
-                } 
+                }
+
+                printf("[MASTER] Sending to worker %d\n", worker);
                 val = hf_sendack(worker, 5000, package.raw_data, sizeof(package.raw_data), 1, 500);
                 worker++; //next worker
                 if (val)
@@ -127,6 +129,7 @@ void do_filter(int32_t width, int32_t height, uint8_t filter){
 }
 
 void master(void){
+    printf("[MASTER] Starting process...\n");
     int32_t worker;
     union Package poison_package;
 
@@ -151,6 +154,7 @@ void master(void){
 void worker(void){
     uint8_t filtered_pixel, task;
     uint16_t cpu, src_port, size;
+    uint32_t tgt_position, pos_flat_buffer;
     int16_t val;
     int32_t i,j;
     int8_t buf[1024];
@@ -167,15 +171,19 @@ void worker(void){
             if (val){
                 printf("[WORKER %d] hf_recvack(): error %d\n", cpu, val);
             } else {
-                // this does not work for images with resolutions greater than 256x256
-                task = buf[0]; // task type
-                int8_t tgt_position = buf[1]; // pixel position of target image
-                uint32_t pos_flat_buffer = 2; // initial position of image buffer
+                // decode buffer into a union to retrieve struct
+                for (i = 0; i < 1024; i++){
+                    package.raw_data[i] = buf[i];
+                }
+                task = package.data.flag; // task type
+                tgt_position = package.data.position; // pixel position of target image
+
+                pos_flat_buffer = 0; // initial position of image buffer
                 if (size == 11){ //3x3 sobel
                     uint8_t block_buffer[3][3];
                     for (i = 0; i < 3; i++){
                         for (j = 0; j < 3; j++){
-                            block_buffer[i][j] = buf[pos_flat_buffer];
+                            block_buffer[i][j] = package.data.pixels[pos_flat_buffer];
                             pos_flat_buffer++;
                         }    
                     }
@@ -192,21 +200,22 @@ void worker(void){
                     filtered_pixel = gausian(block_buffer);
                 } else {
                     //bypass pixel
-                    filtered_pixel = buf[pos_flat_buffer];
+                    filtered_pixel = package.data.pixels[pos_flat_buffer];
                 }
-                /* Sending message to aggregator */
+                /* Sending message to aggregator, using the same reference */
                 package.data.flag = 0; // keep aggregating
                 package.data.position = tgt_position;
                 package.data.pixels[0] = filtered_pixel;
                 //send filtered buffer, one channel for worker
-                val = hf_sendack(AGGREGATOR, 6000, package.raw_data, 1024, hf_selfid(), 500);
+                printf("[WORKER %d] Sending pixel %d in position %d to Aggregator\n", hf_cpuid(), filtered_pixel, tgt_position);
+                val = hf_sendack(AGGREGATOR, 6000, package.raw_data, 1024, hf_cpuid(), 500);
                 if (val)
-                    printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_selfid(), val);
+                    printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_cpuid(), val);
             }
         }
     }
     package.data.flag = POISON_PILL;
-    hf_sendack(AGGREGATOR, 5000, package.raw_data, 1024, hf_selfid(), 500);
+    hf_sendack(AGGREGATOR, 6000, package.raw_data, 1024, hf_cpuid(), 500);
     hf_kill(hf_selfid());
 }
 
@@ -216,11 +225,13 @@ void worker(void){
     if this process receive poison pill of all workers, then this process must die
 */
 void aggregator(void){
-    uint8_t task, poison_pills=0, remaining_workers = 4; // cpus 2, 3, 4 and 5
+    uint8_t task, poison_pills=0, remaining_workers = 4, filtered_pixel; // cpus 2, 3, 4 and 5
     uint16_t cpu, src_port, size;
     int16_t val;
     int8_t buf[1024];
     int32_t i,j, channel, k=0;
+    uint32_t tgt_position;    
+    union Package package;
 
     uint8_t *img;
     img = (uint8_t *) malloc(height * width);
@@ -230,17 +241,23 @@ void aggregator(void){
 
     /*  */
     while (poison_pills < remaining_workers){
+
         channel = hf_recvprobe(); // retorna o channel, cuidado ao enviar, 
         if (channel >= 0) {
             val = hf_recvack(&cpu, &src_port, buf, &size, channel);
             if (val){
-                printf("[WORKER %d] hf_recvack(): error %d\n", cpu, val);
+                printf("[AGGREGATOR] hf_recvack(): error %d\n", cpu, val);
             } else {
                 // this does not work for images with resolutions greater than 256x256
-                task = buf[0]; // task type
-                uint8_t tgt_position = buf[1]; // pixel position of target image
-                uint8_t filtered_pixel = buf[2];
+                // decode buffer into a union to retrieve struct
+                for (i = 0; i < 1024; i++){
+                    package.raw_data[i] = buf[i];
+                }
+                task = package.data.flag; // task type
+                tgt_position = package.data.position; // pixel position of target image
+                filtered_pixel = package.data.pixels[0];
                 img[tgt_position] = filtered_pixel;
+                printf("[AGGREGATOR] Received pixel: %d in position: %d\n", filtered_pixel, tgt_position);
                 if (task == POISON_PILL) {
                     poison_pills++;
                 }
@@ -275,10 +292,13 @@ void aggregator(void){
 */
 void app_main(void) {
     if (hf_cpuid() == MASTER){
-        hf_spawn(master, 0, 0, 0, "filter", 2048);
+        printf("Spawn Master...\n");
+        hf_spawn(master, 0, 0, 0, "filter", 4096);
     } else if (hf_cpuid() == AGGREGATOR){
-        hf_spawn(aggregator, 0, 0, 0, "aggregator", 2048);
+        printf("Spawn Aggregator...\n");
+        hf_spawn(aggregator, 0, 0, 0, "aggregator", 4096);
     } else {
-        hf_spawn(worker, 0, 0, 0, "worker", 2048);
+        printf("Spawn worker %d...\n", hf_cpuid());
+        hf_spawn(worker, 0, 0, 0, "worker", 4096);
     }
 }

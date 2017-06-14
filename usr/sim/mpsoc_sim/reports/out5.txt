@@ -1,0 +1,41 @@
+
+KERNEL: booting...
+===========================================================
+HellfireOS v2.17.03 [Jun 14 2017, 19:19:30]
+Embedded Systems Group - GSE, PUCRS - [2007 - 2017]
+===========================================================
+
+arch:          mips/plasma
+sys clk:       25000 kHz
+time slice:    10480 us
+heap size:     500000 bytes
+max tasks:     30
+
+HAL: _vm_init()
+HAL: _sched_init()
+HAL: _irq_init()
+HAL: _timer_init()
+KERNEL: [idle task], id: 0, p:0, c:0, d:0, addr: 100011c0, sp: 10018520, ss: 1024 bytes
+HAL: _device_init()
+KERNEL: this is core 5
+KERNEL: NoC queue init, 64 packets
+KERNEL: NoC driver registered
+HAL: _task_init()Spawn worker 5...
+
+KERNEL: [worker], id: 1, p:0, c:0, d:0, addr: 10002cd4, sp: 1001b850, ss: 4096 bytes
+KERNEL: free heap: 485368 bytes
+KERNEL: HellfireOS is running
+[WORKER 5] Sending pixel 101 in position 3 to Aggregator
+[WORKER 5] Sending pixel 101 in position 7 to Aggregator
+[WORKER 5] Sending pixel 101 in position 11 to Aggregator
+[WORKER 5] Sending pixel 101 in position 15 to Aggregator
+[WORKER 5] Sending pixel 101 in position 19 to Aggregator
+[WORKER 5] Sending pixel 101 in position 23 to Aggregator
+[WORKER 5] Sending pixel 101 in position 27 to Aggregator
+[WORKER 5] Sending pixel 101 in position 31 to Aggregator
+[WORKER 5] Sending pixel 101 in position 35 to Aggregator
+[WORKER 5] Sending pixel 101 in position 39 to Aggregator
+[WORKER 5] Sending pixel 101 in position 43 to Aggregator
+[WORKER 5] Sending pixel 101 in position 47 to Aggregator
+[WORKER 5] Sending pixel 101 in position 51 to Aggregator
+[WORKER 5] Sending pixel 101 in position 55 to Aggregator
