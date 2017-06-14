@@ -2,9 +2,15 @@
 #include <noc.h>
 #include "image.h"
 
-#define POISON_PILL 3
 #define MASTER 0
 #define AGGREGATOR 1
+
+// Message flags
+#define GAUSIAN 0
+#define SOBEL 1
+#define BYPASS_PIXEL 2
+#define POISON_PILL 3
+
 
 uint8_t gausian(uint8_t buffer[5][5]){
     int32_t sum = 0, mpixel;
@@ -60,99 +66,57 @@ uint8_t sobel(uint8_t buffer[3][3]){
     return (uint8_t)sum;
 }
 
-void do_gausian(int32_t width, int32_t height){
-    int32_t i, j, k, l, pos, worker = 2, buf_pos;
-    uint8_t image_buf[27]; // 1+1+(5x5) 
+struct Data{
+    uint8_t flag;
+    uint32_t position;
+    uint8_t pixels[25];
+};
 
-    for(i = 0; i < height; i++){
-        if (i > 1 || i < height-2){
-            for(j = 0; j < width; j++){
-                pos = ((i * width) + j); // posição da img
-                image_buf[1] = pos;
-                if (j > 1 || j < width-2){
-                    // Create a flat buffer
-                    buf_pos = 2;
-                    for (k = 0; k < 5;k++)
-                        for(l = 0; l < 5; l++){
-                            image_buf[buf_pos] = image[(((i + l-1) * width) + (j + k-1))];
-                            buf_pos++;
-                        }
+union Package{
+    struct Data data;
+    int8_t raw_data[1024];
+};
 
-                    /* Delegate the buffer to the worker */
-                    if (worker > 5){
-                        worker = 2; //round robin
-                    } 
-                    val = hf_sendack(worker, 5000, image_buf, sizeof(image_buf), 1, 500);
-                    worker++; //next worker
-                    if (val)
-                        printf("[MASTER] hf_sendack() to worker %d error: %d\n", worker, val);
-                }else{    if (i > 0 || i < height-1){
-            for(j = 0; j < width-1; j++){
-                pos = ((i * width) + j); // posição da img
-                image_buf[1] = pos;
-                if (j > 0 || j < width-1){
-                    // Create a flat buffer
-                    buf_pos = 2;
-                    for (k = 0; k < 3;k++){
-                        for(l = 0; l < 3; l++){
-                            image_buf[buf_pos] = image[(((i + l-1) * width) + (j + k-1))];
-                            buf_pos++;
-                        }
-                    }
-                    image_buf[0] = 0;//apply gaussian filter
-                }else{
-                    image_buf[0] = 2;//do nothing, just bypass the pixel
-                    image_buf[2] = image[((i * width) + j)]; // bypass pixel
-                }
-
-                /* Delegate the buffer to the worker */
-                if (worker > 5){
-                    worker = 2; //round robin
-                } 
-                val = hf_sendack(worker, 5000, image_buf, sizeof(image_buf), 1, 500);
-                worker++; //next worker
-                if (val)
-                    printf("[MASTER] hf_sendack() to worker %d error: %d\n", worker, val);
-            }
-        }
-                    image_buf[0] = 2;//do nothing, just bypass the pixel
-                    image_buf[2] = image[((i * width) + j)]; // bypass pixel
-                }
-            }
-        }
-    }
-}
-
-void do_sobel(int32_t width, int32_t height){
-    int32_t i, j, k, l, pos, worker = 2, buf_pos;
+/* Aplica o filtro. filter 0 = gaussian, filter 1 == sobel*/
+void do_filter(int32_t width, int32_t height, uint8_t filter){
+    int32_t i, j, k, l, pos, worker = 2, buf_pos = 0;
     int16_t val;
-    uint8_t image_buf[11]; // 1+1+(3x3) 
+    int8_t block_size; // 1+1+(3x3)
+    union Package package; // package to transfer
+
+    if (filter == GAUSIAN){
+        block_size = 5;
+    } else if (filter == SOBEL){
+        block_size = 3;
+    } else {
+        block_size = 5;
+    }
 
     for(i = 0; i < height; i++){
         if (i > 0 || i < height-1){
             for(j = 0; j < width-1; j++){
                 pos = ((i * width) + j); // posição da img
-                image_buf[1] = pos;
+                package.data.position = pos;
+                
                 if (j > 0 || j < width-1){
+                    package.data.flag = filter;
                     // Create a flat buffer
-                    buf_pos = 2;
-                    for (k = 0; k < 3;k++){
-                        for(l = 0; l < 3; l++){
-                            image_buf[buf_pos] = image[(((i + l-1) * width) + (j + k-1))];
+                    for (k = 0; k < block_size;k++){
+                        for(l = 0; l < block_size; l++){
+                            package.data.pixels[buf_pos] = image[(((i + l-1) * width) + (j + k-1))];
                             buf_pos++;
                         }
                     }
-                    image_buf[0] = 0;//apply gaussian filter
                 }else{
-                    image_buf[0] = 2;//do nothing, just bypass the pixel
-                    image_buf[2] = image[((i * width) + j)]; // bypass pixel
+                    package.data.flag = BYPASS_PIXEL;
+                    package.data.pixels[0] = image[((i * width) + j)]; // bypass pixel
                 }
 
                 /* Delegate the buffer to the worker */
                 if (worker > 5){
                     worker = 2; //round robin
                 } 
-                val = hf_sendack(worker, 5000, image_buf, sizeof(image_buf), 1, 500);
+                val = hf_sendack(worker, 5000, package.raw_data, sizeof(package.raw_data), 1, 500);
                 worker++; //next worker
                 if (val)
                     printf("[MASTER] hf_sendack() to worker %d error: %d\n", worker, val);
@@ -163,18 +127,17 @@ void do_sobel(int32_t width, int32_t height){
 }
 
 void master(void){
-    int32_t msg = 0, worker;
-    int8_t buf[2];
-    int16_t val, channel;
+    int32_t worker;
+    union Package poison_package;
 
     if (hf_comm_create(hf_selfid(), 1000, 0))
         panic(0xff);
 
-    do_gausian(width, height);
-    do_sobel(width, height);
-    buf[0] = POISON_PILL;
-    for (worker = 2; worker <=5; worker++){
-        hf_sendack(worker, 5000, buf, sizeof(buf), 1, 500);
+    do_filter(width, height, GAUSIAN);
+    do_filter(width, height, SOBEL);
+    poison_package.data.flag = POISON_PILL;
+    for (worker = 2; worker <= 5; worker++){
+        hf_sendack(worker, 5000, poison_package.raw_data, 1024, 1, 500);
     }
     hf_kill(hf_selfid());
 }
@@ -186,10 +149,13 @@ void master(void){
     if task is poison_pill, then this process must die
 */
 void worker(void){
-    int8_t buf[1500], filtered_pixel;
-    uint16_t cpu, src_port, size, task;
+    uint8_t filtered_pixel, task;
+    uint16_t cpu, src_port, size;
     int16_t val;
     int32_t i,j;
+    int8_t buf[1024];
+
+    union Package package;
 
     if (hf_comm_create(hf_selfid(), 5000, 0))
         panic(0xff);
@@ -202,11 +168,11 @@ void worker(void){
                 printf("[WORKER %d] hf_recvack(): error %d\n", cpu, val);
             } else {
                 // this does not work for images with resolutions greater than 256x256
-                int task = buf[0]; // task type
-                int tgt_position = buf[1]; // pixel position of target image
-                int pos_flat_buffer = 2; // initial position of image buffer
+                task = buf[0]; // task type
+                int8_t tgt_position = buf[1]; // pixel position of target image
+                uint32_t pos_flat_buffer = 2; // initial position of image buffer
                 if (size == 11){ //3x3 sobel
-                    int8_t block_buffer[3][3];
+                    uint8_t block_buffer[3][3];
                     for (i = 0; i < 3; i++){
                         for (j = 0; j < 3; j++){
                             block_buffer[i][j] = buf[pos_flat_buffer];
@@ -216,7 +182,7 @@ void worker(void){
                     filtered_pixel = sobel(block_buffer);
                 } else if (size == 27) { //5x5
                     //guaussian
-                    int8_t block_buffer[5][5];
+                    uint8_t block_buffer[5][5];
                     for (i = 0; i < 5; i++){
                         for (j = 0; j < 5; j++){
                             block_buffer[i][j] = buf[pos_flat_buffer];
@@ -228,16 +194,19 @@ void worker(void){
                     //bypass pixel
                     filtered_pixel = buf[pos_flat_buffer];
                 }
-
+                /* Sending message to aggregator */
+                package.data.flag = 0; // keep aggregating
+                package.data.position = tgt_position;
+                package.data.pixels[0] = filtered_pixel;
                 //send filtered buffer, one channel for worker
-                val = hf_sendack(AGGREGATOR, 6000, image_buf, sizeof(image_buf), hf_selfid(), 500);
+                val = hf_sendack(AGGREGATOR, 6000, package.raw_data, 1024, hf_selfid(), 500);
                 if (val)
                     printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_selfid(), val);
             }
         }
     }
-    buf[0] = POISON_PILL;
-    hf_sendack(AGGREGATOR, 5000, buf, sizeof(buf), hf_selfid(), 500);
+    package.data.flag = POISON_PILL;
+    hf_sendack(AGGREGATOR, 5000, package.raw_data, 1024, hf_selfid(), 500);
     hf_kill(hf_selfid());
 }
 
@@ -247,10 +216,11 @@ void worker(void){
     if this process receive poison pill of all workers, then this process must die
 */
 void aggregator(void){
-    int8_t buf[1500], filtered_pixel, task, poison_pills=0, remaining_workers = 4; // cpus 2, 3, 4 and 5
+    uint8_t task, poison_pills=0, remaining_workers = 4; // cpus 2, 3, 4 and 5
     uint16_t cpu, src_port, size;
     int16_t val;
-    int32_t i,j, channel;
+    int8_t buf[1024];
+    int32_t i,j, channel, k=0;
 
     uint8_t *img;
     img = (uint8_t *) malloc(height * width);
@@ -268,8 +238,8 @@ void aggregator(void){
             } else {
                 // this does not work for images with resolutions greater than 256x256
                 task = buf[0]; // task type
-                int8_t tgt_position = buf[1]; // pixel position of target image
-                int8_t filtered_pixel = buf[2];
+                uint8_t tgt_position = buf[1]; // pixel position of target image
+                uint8_t filtered_pixel = buf[2];
                 img[tgt_position] = filtered_pixel;
                 if (task == POISON_PILL) {
                     poison_pills++;
