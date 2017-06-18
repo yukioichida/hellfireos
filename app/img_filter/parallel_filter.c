@@ -158,42 +158,55 @@ void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t b
 
 void master(void){
     printf("[MASTER] Starting process...\n");
-    int32_t next_worker = 2, block_lines, block_columns, i, j, k, l, matrix_pos = 0;
+    int32_t next_worker = 2, block_lines, block_columns, val, i, j, k, l, matrix_pos = 0;
     union Package poison_package;
 
     if (hf_comm_create(hf_selfid(), 1000, 0))
         panic(0xff);
 
+    //delay_ms(50);
+
     // Original image in 2D format
     uint8_t matrix[height][width];
+    for (i = 0; i < height; i++)
+        for (j = 0; j < width; j++)
+            matrix[i][j] = 0;
+
     for (i = 0; i < height; i++)
         for (j = 0; j < width; j++)
             matrix[i][j] = image[matrix_pos++];
 
     // Block to be processed in the worker cpu
     uint8_t block[BLOCK_SIZE][BLOCK_SIZE];
+    for (k = 0; k < BLOCK_SIZE; k++)
+                for (l = 0; l < BLOCK_SIZE; l++)
+                    block[k][l] = 0;
 
     block_lines = height / (BLOCK_SIZE-4);
     block_columns = width / (BLOCK_SIZE-4);
     for (i = 0; i < block_lines; i++){
         for (j = 0; j < block_columns; j++){
             sanitize_block(block);
-            create_block(matrix, i, j, block);// create block with border 2
+            create_block(matrix, i, j, block);
+            // create block with border 2
             /* Prepare worker message */
             union Package package;
             package.data.flag = GAUSIAN;
             package.data.block_line = i;
             package.data.block_column = j;
-
             for (k = 0; k <BLOCK_SIZE; k++)
                 for (l = 0; l < BLOCK_SIZE; l++)
                     package.data.pixels[i][j] = block[i][j];
-
             next_worker++;
             if (next_worker > 5){
                 next_worker = 2;
             }
-            hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, 1, 500);
+            printf("[MASTER] Sending block (%d %d) to worker %d\n", i, j, next_worker);
+            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, 1, 500);
+            if (val)
+                printf("Error sending the message to worker. %d Val = %d \n", next_worker, val);
+            
+            delay_ms(250);
         }
     }
     // Kill workers
@@ -212,8 +225,8 @@ void master(void){
 */
 void worker(void){
     uint8_t keep_alive = 1, result_block[BLOCK_SIZE][BLOCK_SIZE];
-    uint16_t cpu, src_port, size,i,j, ch;
-    int16_t val;
+    uint16_t cpu, src_port, size,i,j;
+    int16_t val ,ch;
     int8_t buf[MSG_SIZE];
 
     union Package package;
@@ -223,6 +236,7 @@ void worker(void){
 
     while (keep_alive == 1){
         ch = hf_recvprobe();
+        //printf("[WORKER %d] Probe %d \n", cpu, ch);
         if (ch >= 0) {
             val = hf_recvack(&cpu, &src_port, buf, &size, ch);
             if (val){
@@ -232,10 +246,12 @@ void worker(void){
                 for (i = 0; i < MSG_SIZE; i++){
                     package.raw_data[i] = buf[i];
                 }
+                printf("[WORKER %d] Receive block %d,%d \n", cpu, package.data.block_line, package.data.block_column);
                 if (package.data.flag == POISON_PILL){
                     keep_alive = 0;
                 } else {
                     //do_filter gausian
+                    
                     sanitize_block(result_block);
                     do_filter(package.data.pixels, GAUSIAN, result_block);
                     do_filter(package.data.pixels, SOBEL, result_block);
@@ -249,6 +265,7 @@ void worker(void){
                     val = hf_sendack(AGGREGATOR, 6000, package.raw_data, MSG_SIZE, hf_cpuid(), 500);
                     if (val)
                         printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_cpuid(), val);
+                    delay_ms(50);
                 }
             }
         }
@@ -265,8 +282,8 @@ void worker(void){
 */
 void aggregator(void){
     uint8_t task, poison_pills=0, remaining_workers = 4, keep_alive = 1; // cpus 2, 3, 4 and 5
-    uint16_t cpu, src_port, size, channel, i, j, k=0, l;
-    int16_t val, start_line, start_column, line, column;
+    uint16_t cpu, src_port, size, i, j, k=0, l;
+    int16_t val, start_line, start_column, line, column, channel;
     int8_t buf[MSG_SIZE];
 
     union Package package;
@@ -290,6 +307,7 @@ void aggregator(void){
                 for (i = 0; i < MSG_SIZE; i++){
                     package.raw_data[i] = buf[i];
                 }
+                printf("Receiving from worker %d the block (%d, %d)\n", cpu, package.data.block_line, package.data.block_column);
                 task = package.data.flag; // task type
                 if (task == POISON_PILL) {
                     poison_pills++;
@@ -350,12 +368,12 @@ void aggregator(void){
 void app_main(void) {
     if (hf_cpuid() == MASTER){
         printf("Spawn Master...\n");
-        hf_spawn(master, 0, 0, 0, "filter", 4096);
+        hf_spawn(master, 0, 0, 0, "master", 100000);
     } else if (hf_cpuid() == AGGREGATOR){
         printf("Spawn Aggregator...\n");
-        hf_spawn(aggregator, 0, 0, 0, "aggregator", 4096);
+        hf_spawn(aggregator, 0, 0, 0, "aggregator", 100000);
     } else {
         printf("Spawn worker %d...\n", hf_cpuid());
-        hf_spawn(worker, 0, 0, 0, "worker", 4096);
+        hf_spawn(worker, 0, 0, 0, "worker", 100000);
     }
 }
