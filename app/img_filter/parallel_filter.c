@@ -92,17 +92,20 @@ union Package{
 /* Aplica o filtro. filter 0 = gaussian, filter 1 == sobel*/
 void do_filter(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t filter, uint8_t result[BLOCK_SIZE][BLOCK_SIZE]){
     int32_t i, j, k, l;
-    uint8_t border, block_size;
+    uint8_t border, filter_block_size;
 
     if (filter == GAUSIAN){
         border = 2;
-        block_size = 5;
+        filter_block_size = 5;
     } else if (filter == SOBEL) {
         border = 1;
-        block_size = 3;
+        filter_block_size = 3;
+    } else {
+        border = 2;
+        filter_block_size = 5;
     }
 
-    uint8_t image_buf[block_size][block_size]; // internal buffer for using filters
+    uint8_t image_buf[filter_block_size][filter_block_size]; // internal buffer for using filters
     
     for(i = 0; i < BLOCK_SIZE; i++){
         if (i > 1 || i < height - border){
@@ -112,12 +115,12 @@ void do_filter(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t filter, uint8_t re
                         for(l = 0; l < filter_block_size; l++)
                             image_buf[k][l] = block[k][l];
                     if (filter == GAUSIAN){
-                        result[i][j] = gausian(image_buf)
+                        result[i][j] = gausian(image_buf);
                     }else{
-                        result[i][j] = sobel(image_buf)
+                        result[i][j] = sobel(image_buf);
                     }
                 }else{
-                    result[i][j] = fragment[i][j];
+                    result[i][j] = block[i][j];
                 }
             }
         }
@@ -136,7 +139,7 @@ void sanitize_block(uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
 /**
  Populate a block, leaving border of size 2
 */
-void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t block_column, uint8_t[BLOCK_SIZE][BLOCK_SIZE] block){
+void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t block_column, uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
     uint16_t start_line = (block_line * BLOCK_SIZE);
     uint16_t start_column =  (block_column * BLOCK_SIZE);
     uint8_t i = 2, j;
@@ -155,7 +158,7 @@ void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t b
 
 void master(void){
     printf("[MASTER] Starting process...\n");
-    int32_t worker, i, j, block_lines, block_columns, i, j, k, l, matrix_pos = 0;
+    int32_t next_worker = 2, block_lines, block_columns, i, j, k, l, matrix_pos = 0;
     union Package poison_package;
 
     if (hf_comm_create(hf_selfid(), 1000, 0))
@@ -170,8 +173,8 @@ void master(void){
     // Block to be processed in the worker cpu
     uint8_t block[BLOCK_SIZE][BLOCK_SIZE];
 
-    block_lines = ceil(height / block_size);
-    block_col = ceil(width / block_size);
+    block_lines = height / (BLOCK_SIZE-4);
+    block_columns = width / (BLOCK_SIZE-4);
     for (i = 0; i < block_lines; i++){
         for (j = 0; j < block_columns; j++){
             sanitize_block(block);
@@ -181,17 +184,22 @@ void master(void){
             package.data.flag = GAUSIAN;
             package.data.block_line = i;
             package.data.block_column = j;
-            for (k = 0; k <BLOCK_SIZE; k++){
+
+            for (k = 0; k <BLOCK_SIZE; k++)
                 for (l = 0; l < BLOCK_SIZE; l++)
                     package.data.pixels[i][j] = block[i][j];
 
-            hf_sendack(worker, 5000, package.raw_data, MSG_SIZE, 1, 500);
+            next_worker++;
+            if (next_worker > 5){
+                next_worker = 2;
+            }
+            hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, 1, 500);
         }
     }
     // Kill workers
     poison_package.data.flag = POISON_PILL;
-    for (worker = 2; worker <= 5; worker++){
-        hf_sendack(worker, 5000, poison_package.raw_data, ..., 1, 500);
+    for (next_worker = 2; next_worker <= 5; next_worker++){
+        hf_sendack(next_worker, 5000, poison_package.raw_data, MSG_SIZE, 1, 500);
     }
     hf_kill(hf_selfid());
 }
@@ -203,7 +211,7 @@ void master(void){
     if task is poison_pill, then this process must die
 */
 void worker(void){
-    uint8_t filtered_pixel, flag, keep_alive = 1, result_block[BLOCK_SIZE][BLOCK_SIZE];
+    uint8_t keep_alive = 1, result_block[BLOCK_SIZE][BLOCK_SIZE];
     uint16_t cpu, src_port, size,i,j, ch;
     int16_t val;
     int8_t buf[MSG_SIZE];
@@ -234,12 +242,10 @@ void worker(void){
 
                     /* Sending message to aggregator, using the same reference */
                     package.data.flag = KEEP_ALIVE; // keep aggregating
-                    for (i = 0; i < BLOCK_SIZE; i++){
-                        for ( j = 0; j < BLOCK_SIZE; j++){
+                    for (i = 0; i < BLOCK_SIZE; i++)
+                        for ( j = 0; j < BLOCK_SIZE; j++)
                             package.data.pixels[i][j] = result_block[i][j];
-
-                    //send filtered buffer, one channel for worker
-                    printf("[WORKER %d] Sending pixel %d in position %d to Aggregator\n", hf_cpuid(), filtered_pixel, tgt_position);
+                    
                     val = hf_sendack(AGGREGATOR, 6000, package.raw_data, MSG_SIZE, hf_cpuid(), 500);
                     if (val)
                         printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_cpuid(), val);
@@ -258,8 +264,8 @@ void worker(void){
     if this process receive poison pill of all workers, then this process must die
 */
 void aggregator(void){
-    uint8_t task, poison_pills=0, remaining_workers = 4, filtered_pixel, keep_alive = 1; // cpus 2, 3, 4 and 5
-    uint16_t cpu, src_port, size, channel, i, j, k, l;
+    uint8_t task, poison_pills=0, remaining_workers = 4, keep_alive = 1; // cpus 2, 3, 4 and 5
+    uint16_t cpu, src_port, size, channel, i, j, k=0, l;
     int16_t val, start_line, start_column, line, column;
     int8_t buf[MSG_SIZE];
 
@@ -295,8 +301,10 @@ void aggregator(void){
                     for (i = 2; i < BLOCK_SIZE-2; i++){
                         for (j = 2; j < BLOCK_SIZE-2; j++){
                             line = start_line + (i-2);
-                            column = start_line + (j-2);
-                            matrix[line][column] = package.data.pixels[i][j];
+                            column = start_column + (j-2);
+                            if (line < height && column < width){
+                                matrix[line][column] = package.data.pixels[i][j];
+                            }
                         }
                     }
                 }else{
