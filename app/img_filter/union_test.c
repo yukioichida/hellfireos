@@ -12,8 +12,15 @@ union Package {
 	int8_t values[32];
 };
 
+void populate_matrix(int8_t matrix[2][2]){
+	matrix[1][1] = 2;
+	matrix[1][0] = 2;
+	matrix[0][0] = 2;
+	matrix[0][1] = 2;
+}
+
 int main(){
-	int k;
+	int k,i,j;
 
 	union Package package;
 
@@ -33,4 +40,24 @@ int main(){
 
 	printf("Value of vector union: %d\n", received_i);
 
+	int8_t var[5][5];
+	printf("Size of matrix %ld\n", sizeof(var));
+
+	int8_t m[2][2];
+
+	printf("Original Matrix:\n");
+	for (i=0; i < 2; i++){
+		for(j=0; j < 2; j++){
+			printf("%d\t", m[i][j]);
+		}
+	}
+	printf("\n");
+	populate_matrix(m);
+	printf("Transformed Matrix:\n");
+	for (i=0; i < 2; i++){
+		for(j=0; j < 2; j++){
+			printf("%d\t", m[i][j]);
+		}
+	}
+	printf("\n");
 }
