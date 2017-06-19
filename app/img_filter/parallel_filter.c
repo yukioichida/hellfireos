@@ -127,6 +127,35 @@ void do_filter(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t filter, uint8_t re
     }
 }
 
+void do_gausian(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t result[BLOCK_SIZE][BLOCK_SIZE]){
+    int32_t i, j, k, l, m = 0;
+    uint8_t image_buf[5][5];
+
+    uint8_t flat_buffer[BLOCK_SIZE*BLOCK_SIZE];
+    for(i = 0; i < BLOCK_SIZE; i++){
+        for(j = 0; j < BLOCK_SIZE; j++){
+            flat_buffer[m] = block[i][j];
+            m++;
+        }    
+    }
+    
+    for(i = 0; i < BLOCK_SIZE; i++){
+        if (i > 1 || i < BLOCK_SIZE-2){
+            for(j = 0; j < BLOCK_SIZE; j++){
+                if (j > 1 || j < BLOCK_SIZE-2){
+                    for (k = 0; k < 5;k++)
+                        for(l = 0; l < 5; l++)
+                            image_buf[k][l] = flat_buffer[(((i + l-2) * width) + (j + k-2))];
+
+                    result[i][j] = gausian(image_buf);
+                }else{
+                    result[i][j] = flat_buffer[((i * width) + j)];
+                }
+            }
+        }
+    }
+}
+
 void sanitize_block(uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
     uint16_t i, j;
     for (i = 0; i < BLOCK_SIZE; i++){
@@ -142,12 +171,13 @@ void sanitize_block(uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
 void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t block_column, uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
     uint16_t start_line = (block_line * BLOCK_SIZE);
     uint16_t start_column =  (block_column * BLOCK_SIZE);
-    uint8_t i = 2, j;
+    uint8_t i = 0, j;
     /* Leaving 2 spaces for border */
-    while (i < BLOCK_SIZE-2){
-        j = 2;
-        while (j < BLOCK_SIZE-2){
+    while (i < BLOCK_SIZE){
+        j = 0;
+        while (j < BLOCK_SIZE){
             if (i+start_line < height && j+start_column < width){
+                // FIXME: revisar, pois o i esta considerando a borda, a matriz original não tem a borda
                 block[i][j] = matrix[i+start_line][j+start_column];
             }
             j++;
@@ -164,8 +194,6 @@ void master(void){
     if (hf_comm_create(hf_selfid(), 1000, 0))
         panic(0xff);
 
-    //delay_ms(50);
-
     // Original image in 2D format
     uint8_t matrix[height][width];
     for (i = 0; i < height; i++)
@@ -178,9 +206,6 @@ void master(void){
 
     // Block to be processed in the worker cpu
     uint8_t block[BLOCK_SIZE][BLOCK_SIZE];
-    for (k = 0; k < BLOCK_SIZE; k++)
-                for (l = 0; l < BLOCK_SIZE; l++)
-                    block[k][l] = 0;
 
     block_lines = height / (BLOCK_SIZE-4);
     block_columns = width / (BLOCK_SIZE-4);
@@ -188,6 +213,7 @@ void master(void){
         for (j = 0; j < block_columns; j++){
             sanitize_block(block);
             create_block(matrix, i, j, block);
+
             // create block with border 2
             /* Prepare worker message */
             union Package package;
@@ -196,23 +222,24 @@ void master(void){
             package.data.block_column = j;
             for (k = 0; k <BLOCK_SIZE; k++)
                 for (l = 0; l < BLOCK_SIZE; l++)
-                    package.data.pixels[i][j] = block[i][j];
+                    package.data.pixels[k][l] = block[k][l];
+
             next_worker++;
             if (next_worker > 5){
                 next_worker = 2;
             }
             printf("[MASTER] Sending block (%d %d) to worker %d\n", i, j, next_worker);
-            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, 1, 500);
+            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, next_worker, 500);
             if (val)
                 printf("Error sending the message to worker. %d Val = %d \n", next_worker, val);
             
-            delay_ms(250);
+            delay_ms(200);
         }
     }
     // Kill workers
     poison_package.data.flag = POISON_PILL;
     for (next_worker = 2; next_worker <= 5; next_worker++){
-        hf_sendack(next_worker, 5000, poison_package.raw_data, MSG_SIZE, 1, 500);
+        hf_sendack(next_worker, 5000, poison_package.raw_data, MSG_SIZE, next_worker, 500);
     }
     hf_kill(hf_selfid());
 }
@@ -246,22 +273,25 @@ void worker(void){
                 for (i = 0; i < MSG_SIZE; i++){
                     package.raw_data[i] = buf[i];
                 }
-                printf("[WORKER %d] Receive block %d,%d \n", cpu, package.data.block_line, package.data.block_column);
+                printf("[WORKER %d] Receive block %d,%d \n", hf_cpuid(), package.data.block_line, package.data.block_column);
                 if (package.data.flag == POISON_PILL){
                     keep_alive = 0;
                 } else {
                     //do_filter gausian
                     
                     sanitize_block(result_block);
-                    do_filter(package.data.pixels, GAUSIAN, result_block);
-                    do_filter(package.data.pixels, SOBEL, result_block);
+                    do_gausian(package.data.pixels, result_block);
+                    //do_filter(package.data.pixels, SOBEL, result_block);
 
                     /* Sending message to aggregator, using the same reference */
-                    package.data.flag = KEEP_ALIVE; // keep aggregating
-                    for (i = 0; i < BLOCK_SIZE; i++)
-                        for ( j = 0; j < BLOCK_SIZE; j++)
-                            package.data.pixels[i][j] = result_block[i][j];
+                    //package.data.flag = KEEP_ALIVE; // keep aggregating
+                    //for (i = 0; i < BLOCK_SIZE; i++){
+                      //for ( j = 0; j < BLOCK_SIZE; j++){
+                        //    package.data.pixels[i][j] = result_block[i][j];
+                       //}
+                    //}
                     
+                    printf("[WORKER %d] Sending pixel to aggregator\n", hf_cpuid());
                     val = hf_sendack(AGGREGATOR, 6000, package.raw_data, MSG_SIZE, hf_cpuid(), 500);
                     if (val)
                         printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_cpuid(), val);
@@ -313,19 +343,21 @@ void aggregator(void){
                     poison_pills++;
                 }
                 if (poison_pills < remaining_workers){
-                    start_line = package.data.block_line * (BLOCK_SIZE-2);
-                    start_column = package.data.block_column * (BLOCK_SIZE-2);
+                    start_line = package.data.block_line * (BLOCK_SIZE);
+                    start_column = package.data.block_column * (BLOCK_SIZE);
+
                     // receive pixels, ignoring border
-                    for (i = 2; i < BLOCK_SIZE-2; i++){
-                        for (j = 2; j < BLOCK_SIZE-2; j++){
-                            line = start_line + (i-2);
-                            column = start_column + (j-2);
+                    for (i = 0; i < BLOCK_SIZE; i++){
+                        for (j = 0; j < BLOCK_SIZE; j++){
+                            line = start_line + (i);
+                            column = start_column + (j);
                             if (line < height && column < width){
                                 matrix[line][column] = package.data.pixels[i][j];
                             }
                         }
                     }
                 }else{
+                    printf("Ending Aggregator... \n");
                     keep_alive = 0;
                 }
             }
