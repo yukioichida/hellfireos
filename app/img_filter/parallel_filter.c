@@ -172,12 +172,11 @@ void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t b
     uint16_t start_line = (block_line * BLOCK_SIZE);
     uint16_t start_column =  (block_column * BLOCK_SIZE);
     uint8_t i = 0, j;
-    /* Leaving 2 spaces for border */
+    //printf("Creating block with start_line %d and start_column %d\n", start_line, start_column);
     while (i < BLOCK_SIZE){
         j = 0;
         while (j < BLOCK_SIZE){
-            if (i+start_line < height && j+start_column < width){
-                // FIXME: revisar, pois o i esta considerando a borda, a matriz original não tem a borda
+            if ((i+start_line < height) && (j+start_column < width)){
                 block[i][j] = matrix[i+start_line][j+start_column];
             }
             j++;
@@ -187,8 +186,9 @@ void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t b
 }
 
 void master(void){
-    printf("[MASTER] Starting process...\n");
-    int32_t next_worker = 2, block_lines, block_columns, val, i, j, k, l, matrix_pos = 0;
+    printf("[MASTER] Starting process...h: %d, w: %d\n", height, width);
+    int32_t next_worker = 2, block_lines, block_columns, val, k, l, matrix_pos = 0;
+    uint16_t i,j;
     union Package poison_package;
 
     if (hf_comm_create(hf_selfid(), 1000, 0))
@@ -196,25 +196,31 @@ void master(void){
 
     // Original image in 2D format
     uint8_t matrix[height][width];
-    for (i = 0; i < height; i++)
-        for (j = 0; j < width; j++)
-            matrix[i][j] = 0;
 
-    for (i = 0; i < height; i++)
-        for (j = 0; j < width; j++)
-            matrix[i][j] = image[matrix_pos++];
+    for (i = 0; i < height; i++){
+        for (j = 0; j < width; j++){
+            matrix[i][j] = 0;
+        }
+    }
+    for (i = 0; i < height; i++){
+        for (j = 0; j < width; j++){
+            matrix[i][j] = image[matrix_pos];
+            matrix_pos++;
+        }
+    }
 
     // Block to be processed in the worker cpu
     uint8_t block[BLOCK_SIZE][BLOCK_SIZE];
 
-    block_lines = height / (BLOCK_SIZE-4);
-    block_columns = width / (BLOCK_SIZE-4);
+    //block_lines = height / (BLOCK_SIZE);
+    //block_columns = width / (BLOCK_SIZE);
+    block_lines = 10;
+    block_columns = 8;
     for (i = 0; i < block_lines; i++){
         for (j = 0; j < block_columns; j++){
             sanitize_block(block);
             create_block(matrix, i, j, block);
 
-            // create block with border 2
             /* Prepare worker message */
             union Package package;
             package.data.flag = GAUSIAN;
@@ -224,19 +230,36 @@ void master(void){
                 for (l = 0; l < BLOCK_SIZE; l++)
                     package.data.pixels[k][l] = block[k][l];
 
+            /*uint16_t start_line = package.data.block_line * (BLOCK_SIZE);
+            uint16_t start_column = package.data.block_column * (BLOCK_SIZE);
+            //printf("Start line %d, start_column %d", start_line, start_column);
+            // receive pixels, ignoring border
+            for (k = 0; k < BLOCK_SIZE; k++){
+                for (l = 0; l < BLOCK_SIZE; l++){
+                    uint16_t line = start_line + (k);
+                    uint16_t column = start_column + (l);
+                    if (line < height && column < width){
+                        matrix_out[line][column] = package.data.pixels[k][l];
+                    }
+                }
+            }*/
+
+            
             next_worker++;
             if (next_worker > 5){
                 next_worker = 2;
             }
-            printf("[MASTER] Sending block (%d %d) to worker %d\n", i, j, next_worker);
+
+
+            printf("[MASTER] Sending block (%d %d) to worker %d.\n", i, j, next_worker);
             val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, next_worker, 500);
             if (val)
                 printf("Error sending the message to worker. %d Val = %d \n", next_worker, val);
             
-            delay_ms(200);
+            delay_ms(150);
+            
         }
     }
-    // Kill workers
     poison_package.data.flag = POISON_PILL;
     for (next_worker = 2; next_worker <= 5; next_worker++){
         hf_sendack(next_worker, 5000, poison_package.raw_data, MSG_SIZE, next_worker, 500);
@@ -279,8 +302,8 @@ void worker(void){
                 } else {
                     //do_filter gausian
                     
-                    sanitize_block(result_block);
-                    do_gausian(package.data.pixels, result_block);
+                    //sanitize_block(result_block);
+                    //do_gausian(package.data.pixels, result_block);
                     //do_filter(package.data.pixels, SOBEL, result_block);
 
                     /* Sending message to aggregator, using the same reference */
@@ -295,7 +318,7 @@ void worker(void){
                     val = hf_sendack(AGGREGATOR, 6000, package.raw_data, MSG_SIZE, hf_cpuid(), 500);
                     if (val)
                         printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_cpuid(), val);
-                    delay_ms(50);
+                    delay_ms(40);
                 }
             }
         }
@@ -312,15 +335,21 @@ void worker(void){
 */
 void aggregator(void){
     uint8_t task, poison_pills=0, remaining_workers = 4, keep_alive = 1; // cpus 2, 3, 4 and 5
-    uint16_t cpu, src_port, size, i, j, k=0, l;
+    uint16_t cpu, src_port, size, i, j, l;
+    uint32_t k = 0;
     int16_t val, start_line, start_column, line, column, channel;
     int8_t buf[MSG_SIZE];
 
-    union Package package;
+    
     uint8_t matrix[height][width];
+    for (i = 0; i < height; i++){
+        for (j=0; j < width; j++){
+            matrix[i][j] = 0;
+        }
+    }
 
-    uint8_t *img;
-    img = (uint8_t *) malloc(height * width);
+    //uint8_t *img;
+    //img = (uint8_t *) malloc(height * width);
 
     if (hf_comm_create(hf_selfid(), 6000, 0))
         panic(0xff);
@@ -333,24 +362,26 @@ void aggregator(void){
             if (val){
                 printf("[AGGREGATOR] hf_recvack(): error %d\n", cpu, val);
             } else {
+                union Package package;
                 // decode buffer into a union to retrieve struct
                 for (i = 0; i < MSG_SIZE; i++){
                     package.raw_data[i] = buf[i];
                 }
-                printf("Receiving from worker %d the block (%d, %d)\n", cpu, package.data.block_line, package.data.block_column);
+                //printf("Receiving from worker %d the block (%d, %d)\n", cpu, package.data.block_line, package.data.block_column);
                 task = package.data.flag; // task type
                 if (task == POISON_PILL) {
                     poison_pills++;
                 }
+
                 if (poison_pills < remaining_workers){
-                    start_line = package.data.block_line * (BLOCK_SIZE);
-                    start_column = package.data.block_column * (BLOCK_SIZE);
+                    start_line = package.data.block_line * BLOCK_SIZE;
+                    start_column = package.data.block_column * BLOCK_SIZE;
 
                     // receive pixels, ignoring border
                     for (i = 0; i < BLOCK_SIZE; i++){
                         for (j = 0; j < BLOCK_SIZE; j++){
-                            line = start_line + (i);
-                            column = start_column + (j);
+                            line = start_line + i;
+                            column = start_column + j;
                             if (line < height && column < width){
                                 matrix[line][column] = package.data.pixels[i][j];
                             }
@@ -364,27 +395,19 @@ void aggregator(void){
         }
     }
 
-    l = 0;
-    for (i = 0; i < height; i++){
-        for (j = 0; j < width; j++){
-            img[l] = matrix[i][j];
-            l++;
-        }
-    }
-
     //print the output, just how filter.c does
+    k = 0;
     printf("\n\nint32_t width = %d, height = %d;\n", width, height);
     printf("uint8_t image[] = {\n");
     for (i = 0; i < height; i++){
         for (j = 0; j < width; j++){
-            printf("0x%x", img[i * width + j]);
+            printf("0x%x", matrix[i][j]);
+            //printf("0x%x", img[i * width + j]);
             if ((i < height-1) || (j < width-1)) printf(", ");
             if ((++k % 16) == 0) printf("\n");
         }
     }
     printf("};\n");
-
-    free(img);
 
     printf("\n\nend of processing!\n");
     panic(0);
@@ -400,10 +423,10 @@ void aggregator(void){
 void app_main(void) {
     if (hf_cpuid() == MASTER){
         printf("Spawn Master...\n");
-        hf_spawn(master, 0, 0, 0, "master", 100000);
+        hf_spawn(master, 0, 0, 0, "master", 200000);
     } else if (hf_cpuid() == AGGREGATOR){
         printf("Spawn Aggregator...\n");
-        hf_spawn(aggregator, 0, 0, 0, "aggregator", 100000);
+        hf_spawn(aggregator, 0, 0, 0, "aggregator", 200000);
     } else {
         printf("Spawn worker %d...\n", hf_cpuid());
         hf_spawn(worker, 0, 0, 0, "worker", 100000);
