@@ -94,7 +94,7 @@ void init_block(uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
     uint16_t i, j;
     for (i = 0; i < BLOCK_SIZE; i++){
         for (j = 0; j < BLOCK_SIZE; j++){
-            block[i][j] = 0;
+            block[i][j] = 255;
         }
     }
 }
@@ -109,7 +109,7 @@ void do_sobel(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t result[BLOCK_SIZE][
                 if (j > 0 && j < BLOCK_SIZE-1){
                     for (k = 0; k < 3; k++){
                         for(l=0; l<3; l++){
-                            line = (i-1) + k; //2 left border + 1 + 2 right border
+                            line = (i-1) + k; //1 left border + 1 + 1 right border
                             column = (j-1) + l;
                             buffer[k][l] = block[line][column];
                         }
@@ -128,11 +128,11 @@ void do_gausian(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t result[BLOCK_SIZE
     uint8_t buffer[5][5];
 
     for (i=0; i < BLOCK_SIZE; i++){
-        if (i > 1 && i < BLOCK_SIZE-2){
+        if (i > 1 || i < BLOCK_SIZE-2){
             for (j=0; j< BLOCK_SIZE; j++){
-                if (j > 1 && j < BLOCK_SIZE-2){
+                if (j > 1|| j < BLOCK_SIZE-2){
                     for (k = 0; k < 5; k++){
-                        for(l=0; l<5; l++){
+                        for(l=0; l < 5; l++){
                             line = (i-2) + k; //2 left border + 1 + 2 right border
                             column = (j-2) + l;
                             buffer[k][l] = block[line][column];
@@ -167,15 +167,23 @@ void create_block(uint8_t matrix[height][width], uint16_t block_line, uint16_t b
         }
         i++;
     }
+
 }
 
 void master(void){
-    printf("[MASTER] Starting process...h: %d, w: %d\n", height, width);
     int32_t next_worker = 2, block_lines, block_columns, val, k, l, matrix_pos = 0;
+    uint8_t last_worker;
     uint16_t i,j;
     union Package poison_package;
 
     delay_ms(200);
+    last_worker = (hf_ncores()-1); // ignoring master and aggregator
+
+    block_lines = (height / (BLOCK_SIZE))+2;
+    block_columns = (width / (BLOCK_SIZE))+2;
+    printf("[MASTER] Starting process... Workers = cpu 2 - %d \n", last_worker);
+    printf("Block lines: %d - Block Columns: %d\n", block_lines-1, block_columns-1);
+
     if (hf_comm_create(hf_selfid(), 1000, 0))
         panic(0xff);
 
@@ -192,11 +200,9 @@ void master(void){
     // Block to be processed in the worker cpu
     uint8_t block[BLOCK_SIZE][BLOCK_SIZE];
 
-    block_lines = (height / (BLOCK_SIZE))+2;
-    block_columns = (width / (BLOCK_SIZE))+2;
     for (i = 0; i < block_lines; i++){
         for (j = 0; j < block_columns; j++){
-            init_block(block);
+            //init_block(block);
             create_block(matrix, i, j, block);
 
             /* Prepare worker message */
@@ -208,17 +214,16 @@ void master(void){
                 for (l = 0; l < BLOCK_SIZE; l++)
                     package.data.pixels[k][l] = block[k][l];
 
-            next_worker++;
-            if (next_worker > 5){
+            if (next_worker > last_worker){
                 next_worker = 2;
             }
             
             printf("[MASTER] Sending block (%d %d) to worker %d.\n", i, j, next_worker);
-            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, next_worker, 1000);
-            delay_ms(50);
+            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, next_worker, 700);
+            delay_ms(50); //delay 50 or payback timeout 700
             if (val)
                 printf("Error sending the message to worker. %d Val = %d \n", next_worker, val);
-            
+            next_worker++;
         }
     }
     poison_package.data.flag = POISON_PILL;
@@ -236,16 +241,16 @@ void master(void){
 */
 void worker(void){
     uint8_t keep_alive = 1, result_block[BLOCK_SIZE][BLOCK_SIZE];
-    uint16_t cpu, src_port, size,i,j;
+    uint16_t cpu, src_port, size,i;
     int16_t val ,ch;
     int8_t buf[MSG_SIZE];
     union Package package;
     init_block(result_block);
 
+
+    delay_ms(50);
     if (hf_comm_create(hf_selfid(), 5000, 0))
         panic(0xff);
-
-    delay_ms(20);
 
     while (keep_alive == 1){
         ch = hf_recvprobe();
@@ -263,16 +268,11 @@ void worker(void){
                     keep_alive = 0;
                 } else {
                     package.data.flag = KEEP_ALIVE; 
-                    do_sobel(package.data.pixels, result_block);
-                    //do_sobel(result_block, package.data.pixels);
-                    for (i = 0; i < BLOCK_SIZE; i++){
-                        for(j=0; j < BLOCK_SIZE; j++){
-                            package.data.pixels[i][j] = result_block[i][j];
-                        }
-                    }
-                    
-                    printf("[WORKER %d] Sending pixel to aggregator\n", hf_cpuid());
+                    do_gausian(package.data.pixels, result_block);
+                    do_sobel(result_block, package.data.pixels);
+                    //printf("[WORKER %d] Sending pixel to aggregator\n", hf_cpuid());
                     val = hf_sendack(AGGREGATOR, 6000, package.raw_data, MSG_SIZE, hf_cpuid(), 500);
+                    delay_ms(50);
                     if (val)
                         printf("[WORKER %d] Error sending the message to aggregator. Val = %d \n", hf_cpuid(), val);
                 }
@@ -286,20 +286,15 @@ void worker(void){
 
 
 void aggregator(void){
-    uint8_t task, poison_pills=0, remaining_workers = 4, keep_alive = 1; // cpus 2, 3, 4 and 5
-    uint16_t cpu, src_port, size, i, j, l;
+    uint8_t task, poison_pills=0, remaining_workers, keep_alive = 1; // cpus 2, 3, 4 and 5
+    uint16_t cpu, src_port, size, i, j;
     uint32_t k = 0, time;
     int16_t val, start_line, start_column, line, column, channel;
     int8_t buf[MSG_SIZE];
-
     union Package package;
-    
     uint8_t matrix[height][width];
-    for (i = 0; i < height; i++){
-        for (j=0; j < width; j++){
-            matrix[i][j] = 0;
-        }
-    }
+
+    remaining_workers = hf_ncores() - 2;
 
     if (hf_comm_create(hf_selfid(), 6000, 0))
         panic(0xff);
@@ -318,23 +313,22 @@ void aggregator(void){
                 for (i = 0; i < MSG_SIZE; i++){
                     package.raw_data[i] = buf[i];
                 }
-                printf("Receiving from worker %d the block (%d, %d)\n", cpu, package.data.block_line, package.data.block_column);
+                //printf("Receiving from worker %d the block (%d, %d)\n", cpu, package.data.block_line, package.data.block_column);
                 task = package.data.flag; // task type
                 if (task == POISON_PILL) {
                     poison_pills++;
                 }
 
                 if (poison_pills < remaining_workers){
-                    start_line = package.data.block_line * (BLOCK_SIZE-4);
-                    start_column = package.data.block_column * (BLOCK_SIZE-4);
                     // receive pixels, ignoring border and put into main matrix
+                    start_line = package.data.block_line * (BLOCK_SIZE-4);
+                    start_column = package.data.block_column * (BLOCK_SIZE-4);                    
                     for (i = 2; i < BLOCK_SIZE-2; i++){
                         for (j =2; j < BLOCK_SIZE-2; j++){
                             line = start_line + i - 2;
                             column = start_column + j - 2;
-                            if (line < height && column < width){
-                                matrix[line][column] = package.data.pixels[i][j];
-                            }
+                            if (line < height && column < width)
+                                matrix[line][column] = package.data.pixels[i][j];                            
                         }
                     }
                 }else{
