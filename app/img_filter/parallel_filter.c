@@ -99,6 +99,54 @@ void init_block(uint8_t block[BLOCK_SIZE][BLOCK_SIZE]){
     }
 }
 
+void do_sobel(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t result[BLOCK_SIZE][BLOCK_SIZE]){
+    uint16_t i,j,k,l, line, column;
+    uint8_t buffer[3][3];
+
+    for (i=0; i < BLOCK_SIZE; i++){
+        if (i > 0 && i < BLOCK_SIZE-1){
+            for (j=0; j< BLOCK_SIZE; j++){
+                if (j > 0 && j < BLOCK_SIZE-1){
+                    for (k = 0; k < 3; k++){
+                        for(l=0; l<3; l++){
+                            line = (i-1) + k; //2 left border + 1 + 2 right border
+                            column = (j-1) + l;
+                            buffer[k][l] = block[line][column];
+                        }
+                    }
+                    result[i][j] = sobel(buffer);
+                }else{
+                    result[i][j] = block[i][j];
+                }
+            }
+        }
+    }
+}
+
+void do_gausian(uint8_t block[BLOCK_SIZE][BLOCK_SIZE], uint8_t result[BLOCK_SIZE][BLOCK_SIZE]){
+    uint16_t i,j,k,l, line, column;
+    uint8_t buffer[5][5];
+
+    for (i=0; i < BLOCK_SIZE; i++){
+        if (i > 1 && i < BLOCK_SIZE-2){
+            for (j=0; j< BLOCK_SIZE; j++){
+                if (j > 1 && j < BLOCK_SIZE-2){
+                    for (k = 0; k < 5; k++){
+                        for(l=0; l<5; l++){
+                            line = (i-2) + k; //2 left border + 1 + 2 right border
+                            column = (j-2) + l;
+                            buffer[k][l] = block[line][column];
+                        }
+                    }
+                    result[i][j] = gausian(buffer);
+                }else{
+                    result[i][j] = block[i][j];
+                }
+            }
+        }
+    }
+}
+
 /**
  Populate a block, leaving border of size 2
 */
@@ -166,7 +214,8 @@ void master(void){
             }
             
             printf("[MASTER] Sending block (%d %d) to worker %d.\n", i, j, next_worker);
-            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, next_worker, 500);
+            val = hf_sendack(next_worker, 5000, package.raw_data, MSG_SIZE, next_worker, 1000);
+            delay_ms(50);
             if (val)
                 printf("Error sending the message to worker. %d Val = %d \n", next_worker, val);
             
@@ -190,8 +239,8 @@ void worker(void){
     uint16_t cpu, src_port, size,i,j;
     int16_t val ,ch;
     int8_t buf[MSG_SIZE];
-
     union Package package;
+    init_block(result_block);
 
     if (hf_comm_create(hf_selfid(), 5000, 0))
         panic(0xff);
@@ -214,16 +263,13 @@ void worker(void){
                     keep_alive = 0;
                 } else {
                     package.data.flag = KEEP_ALIVE; 
-
-                    //init_block(result_block);
-                    //do_gausian(package.data.pixels, result_block);
-
-
-                    /*for (i = 0; i < BLOCK_SIZE; i++){
-                      for ( j = 0; j < BLOCK_SIZE; j++){
+                    do_sobel(package.data.pixels, result_block);
+                    //do_sobel(result_block, package.data.pixels);
+                    for (i = 0; i < BLOCK_SIZE; i++){
+                        for(j=0; j < BLOCK_SIZE; j++){
                             package.data.pixels[i][j] = result_block[i][j];
-                       }
-                    }*/
+                        }
+                    }
                     
                     printf("[WORKER %d] Sending pixel to aggregator\n", hf_cpuid());
                     val = hf_sendack(AGGREGATOR, 6000, package.raw_data, MSG_SIZE, hf_cpuid(), 500);
@@ -305,6 +351,7 @@ void aggregator(void){
 
     //print the output, just how filter.c does
     k = 0;
+    printf("{CODE}\n");
     printf("\n\nint32_t width = %d, height = %d;\n", width, height);
     printf("uint8_t image[] = {\n");
     for (i = 0; i < height; i++){
@@ -316,6 +363,8 @@ void aggregator(void){
         }
     }
     printf("};\n");
+
+    printf("{CODE}\n");
 
     printf("\n\nend of processing!\n");
     panic(0);
